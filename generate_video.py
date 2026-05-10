@@ -1,24 +1,15 @@
 import os, sys, json, time, requests
-import traceback
 
-# --- Configuration ---
-# For Gemini, switch to the free Gemma 4 model which has a 3,000 req/day allowance
-GEMINI_MODEL = "gemma-4-9b-it"
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-
-# --- API Keys ---
-GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
-GROQ_KEY = os.environ.get('GROQ_API_KEY')   # Optional, but strongly recommended fallback
+GEMINI_KEY = os.environ['GEMINI_API_KEY']
 
 def log(msg):
     print(f"[LOG] {msg}")
-
-def fail(msg):
+def die(msg):
     print(f"[ERROR] {msg}")
     sys.exit(1)
 
 # ============================================
-# STEP 1: Get trending topic + script
+# STEP 1: Script generation
 # ============================================
 log("Step 1: Generating script...")
 prompt = (
@@ -30,150 +21,157 @@ prompt = (
 
 script = None
 
-# --- Attempt 1: Gemini (Gemma 4, free 3K requests/day) ---
-if GEMINI_KEY:
-    log("Trying Gemini (Gemma 4)...")
-    try:
-        resp = requests.post(
-            GEMINI_URL,
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.9, "maxOutputTokens": 500}
-            },
-            headers={"x-goog-api-key": GEMINI_KEY, "Content-Type": "application/json"},
-            timeout=30
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            script = data['candidates'][0]['content']['parts'][0]['text']
-            log(f"Gemini script generated ({len(script)} chars)")
-        else:
-            log(f"Gemini returned {resp.status_code}: {resp.text[:200]}")
-    except Exception as e:
-        log(f"Gemini error: {e}")
+# --- Attempt 1: Gemini 2.5 Flash Preview (500 req/day free) ---
+log("Trying Gemini 2.5 Flash Preview...")
+try:
+    resp = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview:generateContent",
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 500}
+        },
+        headers={"x-goog-api-key": GEMINI_KEY, "Content-Type": "application/json"},
+        timeout=30
+    )
+    if resp.status_code == 200:
+        script = resp.json()['candidates'][0]['content']['parts'][0]['text']
+        log(f"Gemini script ({len(script)} chars): {script[:120]}...")
+    else:
+        log(f"Gemini returned {resp.status_code}: {resp.text[:200]}")
+except Exception as e:
+    log(f"Gemini error: {e}")
 
-# --- Attempt 2: Groq (14,400 free requests/day) ---
-if not script and GROQ_KEY:
-    log("Trying Groq (Llama 3.1 8B)...")
+# --- Attempt 2: Pollinations.ai (OpenAI-compatible, no key) ---
+if not script:
+    log("Trying Pollinations.ai (free, no key)...")
     try:
         resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+            "https://text.pollinations.ai/openai",
             json={
-                "model": "llama-3.1-8b-instant",
+                "model": "openai-fast",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.9,
                 "max_tokens": 500
             },
-            headers={
-                "Authorization": f"Bearer {GROQ_KEY}",
-                "Content-Type": "application/json"
-            },
+            headers={"Content-Type": "application/json"},
             timeout=30
         )
         if resp.status_code == 200:
-            script = resp.json()['choices'][0]['message']['content']
-            log(f"Groq script generated ({len(script)} chars)")
+            data = resp.json()
+            script = data['choices'][0]['message']['content']
+            log(f"Pollinations script ({len(script)} chars): {script[:120]}...")
         else:
-            log(f"Groq returned {resp.status_code}: {resp.text[:200]}")
-    except Exception as e:
-        log(f"Groq error: {e}")
-
-# --- Attempt 3: Pollinations.ai (no API key needed) ---
-if not script:
-    log("Trying Pollinations.ai (no key required)...")
-    try:
-        resp = requests.get(
-            "https://text.pollinations.ai/",
-            params={"prompt": prompt, "model": "openai"},
-            timeout=30
-        )
-        if resp.status_code == 200 and resp.text.strip():
-            script = resp.text.strip()
-            log(f"Pollinations script generated ({len(script)} chars)")
-        else:
-            log(f"Pollinations returned {resp.status_code}")
+            log(f"Pollinations returned {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         log(f"Pollinations error: {e}")
 
 if not script:
-    fail("All script generators failed")
-
-log(f"Final script: {script[:200]}...")
+    die("All script generators failed")
 
 # ============================================
-# STEP 2: Generate AI video with NexaAPI
+# STEP 2: AI Video generation via Magic Hour
 # ============================================
-log("Step 2: Generating AI video with NexaAPI...")
-NEXA_KEY = os.environ.get('NEXA_API_KEY')
-if not NEXA_KEY:
-    fail("NEXA_API_KEY not set")
+log("Step 2: Generating AI video with Magic Hour...")
 
+MAGIC_HOUR_KEY = os.environ.get('MAGIC_HOUR_API_KEY', '')
 video_url = None
 
-try:
-    job_resp = requests.post(
-        "https://api.nexa-api.com/v1/video/generate",
-        headers={
-            "Authorization": f"Bearer {NEXA_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "prompt": script[:500],
-            "duration": 8,
-            "aspect_ratio": "9:16",
-            "quality": "high"
-        },
-        timeout=30
-    )
-    
-    if job_resp.status_code == 200:
-        job_data = job_resp.json()
-        job_id = job_data.get("job_id")
+if MAGIC_HOUR_KEY:
+    try:
+        # Submit generation job
+        job_resp = requests.post(
+            "https://api.magichour.ai/v1/video/generate",
+            headers={
+                "Authorization": f"Bearer {MAGIC_HOUR_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "prompt": script[:500],
+                "duration": 8,
+                "aspect_ratio": "9:16"
+            },
+            timeout=30
+        )
         
-        if job_id:
-            log(f"NexaAPI job submitted: {job_id}")
+        if job_resp.status_code == 200:
+            job_data = job_resp.json()
+            job_id = job_data.get("job_id") or job_data.get("id")
             
-            for attempt in range(60):
-                status_resp = requests.get(
-                    f"https://api.nexa-api.com/v1/video/status/{job_id}",
-                    headers={"Authorization": f"Bearer {NEXA_KEY}"},
-                    timeout=20
-                )
-                
-                if status_resp.status_code == 200:
-                    status = status_resp.json()
-                    if status.get("status") == "completed":
-                        video_url = status.get("video_url")
-                        if video_url:
-                            log("NexaAPI video ready!")
+            if job_id:
+                log(f"Magic Hour job: {job_id}")
+                for _ in range(60):
+                    status_resp = requests.get(
+                        f"https://api.magichour.ai/v1/video/status/{job_id}",
+                        headers={"Authorization": f"Bearer {MAGIC_HOUR_KEY}"},
+                        timeout=20
+                    )
+                    if status_resp.status_code == 200:
+                        s = status_resp.json()
+                        if s.get("status") == "completed":
+                            video_url = s.get("video_url") or s.get("url")
                             break
-                    elif status.get("status") == "failed":
-                        fail("NexaAPI generation failed")
-                
-                time.sleep(5)
+                        elif s.get("status") == "failed":
+                            log("Magic Hour generation failed")
+                            break
+                    time.sleep(5)
+            else:
+                log(f"Magic Hour response: {job_data}")
         else:
-            fail("No job_id in NexaAPI response")
-    else:
-        fail(f"NexaAPI returned {job_resp.status_code}: {job_resp.text[:200]}")
-        
-except Exception as e:
-    fail(f"NexaAPI error: {e}")
+            log(f"Magic Hour returned {job_resp.status_code}: {job_resp.text[:200]}")
+    except Exception as e:
+        log(f"Magic Hour error: {e}")
 
+# --- Fallback: Pollinations.ai image + FFmpeg ---
 if not video_url:
-    fail("No video URL obtained after generation")
+    log("Step 2b: Falling back to Pollinations.ai image + TTS...")
+    try:
+        # Generate AI image
+        img_resp = requests.get(
+            "https://image.pollinations.ai/prompt/" + requests.utils.quote(script[:200] + ", vertical 9:16, viral style"),
+            params={"width": 1080, "height": 1920},
+            timeout=60
+        )
+        if img_resp.status_code == 200:
+            with open("frame.jpg", "wb") as f:
+                f.write(img_resp.content)
+            
+            # Generate TTS
+            import subprocess
+            subprocess.run([
+                "edge-tts", "--text", script,
+                "--voice", "en-US-JennyNeural",
+                "--write-media", "audio.mp3"
+            ], check=True)
+            
+            # Combine with FFmpeg
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-loop", "1", "-i", "frame.jpg",
+                "-i", "audio.mp3",
+                "-vf", "scale=1080:1920",
+                "-t", "30",
+                "-shortest",
+                "-c:v", "libx264", "-preset", "ultrafast",
+                "-c:a", "aac",
+                "output.mp4"
+            ], check=True)
+            video_url = "local"
+            log("Fallback video assembled locally")
+    except Exception as e:
+        die(f"All video methods failed: {e}")
 
 # ============================================
-# STEP 3: Download final video
+# STEP 3: Download (if remote URL)
 # ============================================
-log(f"Step 3: Downloading video...")
-try:
-    video_data = requests.get(video_url, timeout=120)
-    video_data.raise_for_status()
-    with open("output.mp4", "wb") as f:
-        f.write(video_data.content)
-    log(f"Video downloaded: {len(video_data.content)} bytes")
-except Exception as e:
-    fail(f"Download failed: {e}")
+if video_url and video_url != "local":
+    log(f"Step 3: Downloading video...")
+    try:
+        r = requests.get(video_url, timeout=120)
+        r.raise_for_status()
+        with open("output.mp4", "wb") as f:
+            f.write(r.content)
+        log(f"Downloaded: {len(r.content)} bytes")
+    except Exception as e:
+        die(f"Download failed: {e}")
 
-log("SUCCESS: Video ready for upload!")
-print("::notice title=Video Generated::Your AI Short is ready! Download from Releases.")
+log("SUCCESS: output.mp4 ready!")

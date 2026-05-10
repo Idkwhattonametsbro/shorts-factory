@@ -20,8 +20,10 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests edge-tts
-
+  run: |
+    sudo apt-get update
+    sudo apt-get install -y ffmpeg
+    pip install requests edge-tts magic_hour
       - name: Generate AI Video
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

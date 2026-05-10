@@ -1,0 +1,37 @@
+name: Generate Daily AI Short
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Generate AI Video
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NEXA_API_KEY: ${{ secrets.NEXA_API_KEY }}
+        run: python generate_video.py
+
+      - name: Upload Video to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.run_id }}
+          files: output.mp4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
